@@ -1,0 +1,184 @@
+---
+title: "Calculating statistics for Scottish CoM"
+author: "Dave"
+format: html
+editor: visual
+---
+
+## Houskeeping
+
+### Libraries
+
+```{r libs}
+library(fs)
+library(here)
+library(stringr)
+library(purrr)
+library(vroom)
+library(dplyr)
+```
+
+## Calculate overlaps
+
+### Ldzd data
+
+#### Ldzd CoM Overlaps Data
+
+```{r ldzdOverlaps}
+read_overlaps <- function(area_code){
+
+  
+  overlap_files <-
+    dir_ls(here("com-area-overlaps-northern-ireland",
+                str_c("overlaps_com-", area_code)))
+  
+  names(overlap_files) <-
+    str_extract(overlap_files, "(?<=/)[^/]+(?=\\.csv)") |>
+    str_replace_all("-", "_")
+  
+  overlaps <- map(overlap_files, vroom, col_types = "cd")
+}
+
+
+dz_overlaps <- read_overlaps("dz")
+```
+
+#### Ldzd census statistics
+
+```{r ldzdStats}
+get_census_files = function(area_code){
+  
+  area_glob = str_c("*_", area_code, "_*")  
+  census_files <- dir_ls(here("census-data_northern-ireland"), glob = area_glob)
+  
+  area_code_file_regex <- 
+    str_c("(?<=/northern-ireland_).+(?=_", area_code, "_\\d{4})")
+
+  names(census_files) <- 
+    str_extract(census_files, area_code_file_regex) |> 
+    str_replace_all("-", "_")
+  
+  return(census_files)
+}
+
+dz_census_files <- get_census_files("dz")
+
+dz_census_data <- map(dz_census_files, readRDS)
+```
+
+### Preprocess data
+
+#### Filter unused soa/dz
+
+```{r filterUnused}
+used_dz <-
+  map(dz_overlaps, pull, dz_2021_code) |> 
+  reduce(c) |> 
+  unique()
+
+
+dz_census_data <- map(dz_census_data, filter, dz_2021_code %in% used_dz)
+
+rm(used_dz)
+```
+
+### Join census data to overlap tables
+
+```{r joinOverlapData}
+dz_overlaps <- 
+  map(dz_overlaps,
+      \(x){
+        map(dz_census_data, 
+            \(y){
+              left_join(x, y, by = c("dz_2021_code" = "dz_2021_code")) }) })
+```
+
+### Calulate com area stats
+
+```{r calculateComAreaStats}
+calculate_com_stats <- function(x, ratio_col){
+  
+  ratio_col <- enexpr(ratio_col)
+  
+  mutate(x,
+         across(
+           ## In every numeric column (except the 'ratio' column)
+           where(is.numeric) & !(!!ratio_col),
+           ## Multiply the numbers by the ratio numbers
+           \(y) y * !!ratio_col )) |> 
+    select(-!!ratio_col)
+}
+
+dz_com_stats <- 
+  map(dz_overlaps, map, calculate_com_stats, ratio_dz_intersection_com)
+```
+
+### Create CoM Summaries
+
+```{r createComSummaries}
+dz_com_summaries <- 
+  imap(dz_com_stats, 
+       \(x,y){
+         map(x,
+             \(z){
+               ungroup(z) |>
+                 summarise(across(where(is.numeric), sum)) |> 
+                 mutate(com = y) |> 
+                 relocate(com) }) })
+
+dz_com_summaries <- pmap(dz_com_summaries, list)
+
+com_summaries <- map(dz_com_summaries, reduce, rbind)
+
+
+rm(dz_com_summaries)
+```
+
+## dzve data
+
+### Savve summaries
+
+```{r dzveSummaries}
+com_census_data <- dir_create(here("com-census-data"))
+summaries_dir <- dir_create(com_census_data, "all-com-summaries")
+
+iwalk(com_summaries,
+     \(x, y){
+       file_name <- here(
+         summaries_dir,
+         str_c(
+           "northern-irish-com_",
+           str_replace_all(y, "_", "-"),
+           "_2021.csv"))
+       
+       vroom_write(x, file_name, delim = ",")
+     })
+```
+
+### Save CoM Data
+
+```{r dzveComData}
+com <-
+  names(dz_com_stats) |> 
+  str_replace_all("_", "-")
+
+com_dirs <- dir_create(com_census_data, com)
+
+iwalk(dz_com_stats,
+      \(com_data_list, com_name){
+        
+        iwalk(com_data_list,
+              \(stat_tibble, stat_name){
+                
+                                neat_com_name = str_replace_all(com_name, "_", "-")
+                neat_stat_name = str_replace_all(stat_name, "_", "-")
+                
+                dzve_path =
+                  str_c(com_census_data, "/", neat_com_name, "/",
+                        neat_stat_name, "_dz_2021.csv")
+                
+                vroom_write(
+                  stat_tibble,
+                  file = dzve_path,
+                  delim = ",") }) })
+```
