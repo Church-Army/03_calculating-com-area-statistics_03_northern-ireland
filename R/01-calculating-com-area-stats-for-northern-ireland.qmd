@@ -16,6 +16,7 @@ library(stringr)
 library(purrr)
 library(vroom)
 library(dplyr)
+conflicted::conflicts_prefer(dplyr::filter)
 ```
 
 ## Calculate overlaps
@@ -33,8 +34,7 @@ read_overlaps <- function(area_code){
                 str_c("overlaps_com-", area_code)))
   
   names(overlap_files) <-
-    str_extract(overlap_files, "(?<=/)[^/]+(?=\\.csv)") |>
-    str_replace_all("-", "_")
+    str_extract(overlap_files, "(?<=/)[^/]+(?=\\.csv)")
   
   overlaps <- map(overlap_files, vroom, col_types = "cd")
 }
@@ -43,7 +43,7 @@ read_overlaps <- function(area_code){
 dz_overlaps <- read_overlaps("dz")
 ```
 
-#### Ldzd census statistics
+#### Load census statistics
 
 ```{r ldzdStats}
 get_census_files = function(area_code){
@@ -105,7 +105,7 @@ calculate_com_stats <- function(x, ratio_col){
            ## In every numeric column (except the 'ratio' column)
            where(is.numeric) & !(!!ratio_col),
            ## Multiply the numbers by the ratio numbers
-           \(y) y * !!ratio_col )) |> 
+           \(y) y * !!ratio_col)) |> 
     select(-!!ratio_col)
 }
 
@@ -134,9 +134,9 @@ com_summaries <- map(dz_com_summaries, reduce, rbind)
 rm(dz_com_summaries)
 ```
 
-## dzve data
+## Save data
 
-### Savve summaries
+### Save summaries
 
 ```{r dzveSummaries}
 com_census_data <- dir_create(here("com-census-data"))
